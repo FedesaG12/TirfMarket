@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ContentType
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -49,6 +49,7 @@ ADMIN_ID = int(raw_admin_id.strip()) if raw_admin_id.strip().isdigit() else None
 
 # Layer 4: WebApp URL (must be HTTPS for Telegram Mini Apps)
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+BOT_USERNAME = ""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -338,12 +339,22 @@ def get_claim_deal_keyboard(
     zone: str = "4 Kilo Branch",
 ) -> InlineKeyboardMarkup:
     """
-    Layer 4 Upgrade:
-    If WEBAPP_URL is configured (HTTPS), attaches a Telegram WebApp window overlay.
-    Otherwise falls back to direct inline callback query.
+    Returns an InlineKeyboardMarkup with:
+    1. Direct 1-Tap claim button (callback_data) - guaranteed instant voucher delivery in chat
+    2. Interactive Telegram Mini App button (if WEBAPP_URL is set)
     """
+    inline_keyboard = []
+
+    # Button 1: Instant 1-Tap Claim (Works 100% natively in Telegram chat without webview)
+    inline_keyboard.append([
+        InlineKeyboardButton(
+            text=f"⚡ 1-Tap Claim Voucher ({price} ETB)",
+            callback_data=f"claim:{deal_id}",
+        )
+    ])
+
+    # Button 2: Telegram Mini App view (if WEBAPP_URL configured)
     if WEBAPP_URL:
-        # Build URL with dynamic query parameters
         params = urllib.parse.urlencode({
             "deal_id": deal_id,
             "price": str(price),
@@ -351,32 +362,19 @@ def get_claim_deal_keyboard(
             "item": f"{restaurant_name} Flash Special",
             "original": str(round(price * 1.58)),
             "zone": zone,
+            "bot": BOT_USERNAME,
         })
         separator = "&" if "?" in WEBAPP_URL else "?"
         full_webapp_url = f"{WEBAPP_URL}{separator}{params}"
 
-        return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=f"⚡ Claim Deal ({price} ETB)",
-                        web_app=WebAppInfo(url=full_webapp_url),
-                    )
-                ]
-            ]
-        )
+        inline_keyboard.append([
+            InlineKeyboardButton(
+                text="📱 View in Mini App",
+                web_app=WebAppInfo(url=full_webapp_url),
+            )
+        ])
 
-    # Fallback to direct callback button if WEBAPP_URL not yet configured
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"⚡ Claim Deal ({price} ETB)",
-                    callback_data=f"claim:{deal_id}",
-                )
-            ]
-        ]
-    )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
 def build_deal_caption(restaurant_name: str, zones_str: str, stock: int, price: int) -> str:
@@ -398,8 +396,48 @@ dp = Dispatcher(storage=MemoryStorage())
 # LAYER 1: Student Onboarding & Zone Radar
 # ---------------------------------------------------------
 @dp.message(CommandStart())
-async def handle_start(message: Message, state: FSMContext):
+async def handle_start(message: Message, command: CommandObject, state: FSMContext):
     await state.clear()
+
+    # Check if launched with a deep-link from Mini App (e.g. /start claim_<deal_id>)
+    if command.args and command.args.startswith("claim_"):
+        deal_id = command.args[len("claim_"):]
+        student_id = message.from_user.id
+
+        result = process_claim_transaction(deal_id, student_id)
+
+        if result["status"] == "already_claimed":
+            await message.answer(
+                "⚠️ <b>You already locked this deal!</b>\nHere is your active voucher pass below:",
+                parse_mode="HTML"
+            )
+        elif result["status"] == "sold_out":
+            await message.answer("❌ <b>Sorry, this flash deal is completely sold out!</b>", parse_mode="HTML")
+            return
+        elif result["status"] == "inactive":
+            await message.answer("This flash deal is no longer active.")
+            return
+
+        deal = get_deal_by_id(deal_id)
+        restaurant = deal["restaurant_name"] if deal else "Restaurant"
+        price = deal["price"] if deal else 360
+        zones_display = (deal["zones"] if ("zones" in deal.keys() and deal["zones"]) else deal["zone"]) if deal else "AAU Campus"
+
+        voucher_msg = (
+            "✅ <b>DEAL LOCKED & CONFIRMED!</b>\n\n"
+            "🎟️ <b>ACTION VOUCHER PASS:</b>\n"
+            "👉 <code>[ SHOW AAU ID ]</code> 👈\n\n"
+            f"🍔 <b>Deal:</b> 1x {restaurant} Flash Special\n"
+            f"💵 <b>Price:</b> {price} ETB (Pay at counter)\n"
+            f"📍 <b>Location:</b> {zones_display}\n"
+            "⏰ <b>Valid Until:</b> 9:30 PM Tonight\n\n"
+            "💡 <b>Instructions:</b>\n"
+            f"Show this message and your physical AAU Student ID to the cashier. Pay {price} ETB directly at the counter via Cash or Telebirr."
+        )
+        await message.answer(voucher_msg, parse_mode="HTML")
+        logger.info(f"Student {student_id} claimed deal {deal_id} via Mini App deep link. Remaining stock: {result.get('new_stock')}")
+        return
+
     welcome_text = (
         "Welcome to TirfMarket! 🍔\n"
         "We surface exclusive student flash deals from restaurants around campus.\n\n"
@@ -889,6 +927,15 @@ async def main():
     init_db()
 
     bot = Bot(token=BOT_TOKEN)
+
+    # Fetch bot username for Mini App deep links
+    try:
+        me = await bot.get_me()
+        global BOT_USERNAME
+        BOT_USERNAME = me.username or ""
+        logger.info(f"🤖 Connected as @{BOT_USERNAME}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve bot info: {e}")
 
     commands = [
         BotCommand(command="start", description="Set or change campus zone"),
