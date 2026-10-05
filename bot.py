@@ -19,6 +19,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     Message,
     CallbackQuery,
     BotCommand,
@@ -44,12 +46,36 @@ logger = logging.getLogger("tirfmarket-bot")
 
 DB_FILE = "tirfmarket.db"
 
+
+# Multiple Admin Support
+# We can load admins from ADMIN_ID in .env (comma-separated if multiple, e.g. ADMIN_ID=123,456) or an admin table.
+def get_admin_ids() -> set[int]:
+    raw = os.getenv("ADMIN_ID", "")
+    admins = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            admins.add(int(part))
+    
+    # Also fetch any dynamically added admins from the database if table exists
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT telegram_id FROM admins")
+            for row in cursor.fetchall():
+                admins.add(int(row[0]))
+    except Exception:
+        pass
+        
+    return admins
+
 class IsAdmin(BaseFilter):
     async def __call__(self, event: Message | CallbackQuery) -> bool:
-        if ADMIN_ID is None:
+        admin_set = get_admin_ids()
+        if not admin_set:
             return False
         user = event.from_user
-        return bool(user and user.id == ADMIN_ID)
+        return bool(user and user.id in admin_set)
 
 CAMPUS_ZONES = {
     "4_kilo": "4 Kilo Campus",
@@ -68,6 +94,7 @@ class NewDealStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_price = State()
     waiting_for_stock = State()
+    waiting_for_valid_until = State()
     waiting_for_map_link = State()
     waiting_for_zone = State()
 
@@ -106,6 +133,7 @@ def init_db():
                 zone TEXT NOT NULL,
                 zones TEXT DEFAULT '',
                 map_link TEXT DEFAULT '',
+                valid_until TEXT DEFAULT '9:30 PM Tonight (3:30 ከሰዓት በኋላ)',
                 is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -116,6 +144,8 @@ def init_db():
             cursor.execute("ALTER TABLE active_deals ADD COLUMN zones TEXT DEFAULT ''")
         if "map_link" not in existing_cols:
             cursor.execute("ALTER TABLE active_deals ADD COLUMN map_link TEXT DEFAULT ''")
+        if "valid_until" not in existing_cols:
+            cursor.execute("ALTER TABLE active_deals ADD COLUMN valid_until TEXT DEFAULT '9:30 PM Tonight (3:30 ከሰዓት በኋላ)'")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS claims (
@@ -151,6 +181,27 @@ def init_db():
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                telegram_id INTEGER PRIMARY KEY,
+                added_by INTEGER,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                user_handle TEXT,
+                deal_name TEXT DEFAULT 'TirfMarket Deal',
+                media_type TEXT,
+                file_id TEXT,
+                text_content TEXT,
+                status TEXT DEFAULT 'pending'
+            )
+        """)
+
 def save_user_zone(telegram_id: int, username: str | None, full_name: str | None, zone: str):
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
@@ -163,6 +214,12 @@ def save_user_zone(telegram_id: int, username: str | None, full_name: str | None
                 zone = excluded.zone,
                 updated_at = CURRENT_TIMESTAMP
             """, (telegram_id, username, full_name, zone))
+        
+        cursor.execute("PRAGMA table_info(active_deals)")
+        existing_deal_cols = [col[1] for col in cursor.fetchall()]
+        if "valid_until" not in existing_deal_cols:
+            cursor.execute("ALTER TABLE active_deals ADD COLUMN valid_until TEXT DEFAULT '9:30 PM Tonight (3:30 ከሰዓት በኋላ)'")
+
         conn.commit()
 
 def get_user(telegram_id: int):
@@ -181,15 +238,15 @@ def get_users_by_zones(target_zones: list[str]):
         cursor.execute(f"SELECT telegram_id, full_name, username, zone FROM users WHERE zone IN ({placeholders})", target_zones)
         return cursor.fetchall()
 
-def save_active_deal(deal_id: str, restaurant_name: str, photo_file_id: str, price: int, stock: int, target_zones: list[str], map_link: str):
+def save_active_deal(deal_id: str, restaurant_name: str, photo_file_id: str, price: int, stock: int, target_zones: list[str], map_link: str, valid_until: str):
     zones_joined = ", ".join(target_zones)
     primary_zone = target_zones[0] if target_zones else "4 Kilo Campus"
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO active_deals (deal_id, restaurant_name, photo_file_id, price, initial_stock, remaining_stock, zone, zones, map_link, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """, (deal_id, restaurant_name, photo_file_id, price, stock, stock, primary_zone, zones_joined, map_link))
+            INSERT INTO active_deals (deal_id, restaurant_name, photo_file_id, price, initial_stock, remaining_stock, zone, zones, map_link, valid_until, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """, (deal_id, restaurant_name, photo_file_id, price, stock, stock, primary_zone, zones_joined, map_link, valid_until))
         conn.commit()
 
 def get_all_active_deals():
@@ -304,6 +361,18 @@ def return_claim_transaction(deal_id: str, telegram_id: int):
         return True
 
 
+
+def get_student_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📡 Active Radar"), KeyboardButton(text="⭐ Rate Deals")],
+            [KeyboardButton(text="📸 Share Review"), KeyboardButton(text="🏆 Leaderboard")],
+            [KeyboardButton(text="📍 Change Campus Zone")]
+        ],
+        resize_keyboard=True,
+        is_persistent=True
+    )
+
 def get_campus_selection_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="[ 4 Kilo Campus ]", callback_data="zone:4_kilo")],
@@ -363,6 +432,7 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
         zones_display = (deal["zones"] if ("zones" in deal.keys() and deal["zones"]) else deal["zone"]) if deal else "AAU Campus"
         map_link_str = f"🗺️ <b>Map:</b> {deal['map_link']}\n" if deal and ("map_link" in deal.keys() and deal["map_link"]) else ""
 
+        valid_until_str = deal["valid_until"] if deal and "valid_until" in deal.keys() and deal["valid_until"] else "9:30 PM Tonight (3:30 ከሰዓት በኋላ)"
         voucher_msg = (
             "✅ <b>DEAL LOCKED & CONFIRMED!</b>\n\n"
             "🎟️ <b>ACTION VOUCHER PASS:</b>\n"
@@ -371,7 +441,7 @@ async def handle_start(message: Message, command: CommandObject, state: FSMConte
             f"💵 <b>Price:</b> {price} ETB (Pay at counter)\n"
             f"📍 <b>Location:</b> {zones_display}\n"
             f"{map_link_str}"
-            "⏰ <b>Valid Until:</b> 9:30 PM Tonight\n\n"
+            f"⏰ <b>Valid Until:</b> {valid_until_str}\n\n"
             "💡 <b>Instructions:</b>\n"
             f"Show this message and your physical AAU Student ID to the cashier."
         )
@@ -387,12 +457,38 @@ async def handle_zone_selection(callback: CallbackQuery):
     selected_zone = CAMPUS_ZONES.get(zone_key, "Unknown Campus")
     user = callback.from_user
     save_user_zone(telegram_id=user.id, username=user.username, full_name=user.full_name, zone=selected_zone)
-    confirmation_text = f"✅ Zone set to {selected_zone}! Radar active. We'll ping you when deals drop nearby."
+    confirmation_text = f"✅ Zone set to {selected_zone}! Radar active. Use the menu buttons below to browse deals, rate, or share."
     if callback.message:
         await callback.message.edit_text(text=confirmation_text, reply_markup=None)
+        # Send a prompt with the persistent reply keyboard
+        await callback.message.answer("👇 <b>TirfMarket Quick Menu Activated</b>", parse_mode="HTML", reply_markup=get_student_reply_keyboard())
     else:
         await callback.answer(confirmation_text, show_alert=True)
     await callback.answer()
+
+
+@dp.message(F.text == "📡 Active Radar")
+async def handle_reply_radar(message: Message):
+    # Simulate /radar command
+    await handle_radar(message)
+
+@dp.message(F.text == "⭐ Rate Deals")
+async def handle_reply_rate(message: Message, state: FSMContext):
+    await handle_rate_command(message, state)
+
+@dp.message(F.text == "📸 Share Review")
+async def handle_reply_share(message: Message, state: FSMContext):
+    await handle_share_command(message, state)
+
+@dp.message(F.text == "🏆 Leaderboard")
+async def handle_reply_leaderboard(message: Message):
+    await handle_leaderboard(message)
+
+@dp.message(F.text == "📍 Change Campus Zone")
+async def handle_reply_zone(message: Message, state: FSMContext):
+    await state.clear()
+    welcome_text = "Select your campus zone below to update your radar:"
+    await message.answer(text=welcome_text, reply_markup=get_campus_selection_keyboard())
 
 @dp.message(Command("radar"))
 @dp.message(Command("status"))
@@ -430,20 +526,125 @@ async def handle_radar(message: Message):
 
     text_lines.append("<i>Tap an active deal below to claim it instantly!</i>")
     
+    # Add navigation buttons for leaderboard and sharing feedback
+    inline_keyboard.append([
+        InlineKeyboardButton(text="🏆 Leaderboard", callback_data="nav:leaderboard"),
+        InlineKeyboardButton(text="📸 Share Review", callback_data="nav:share")
+    ])
+    
     await message.answer("\n".join(text_lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_keyboard))
+
+@dp.callback_query(F.data.startswith("nav:"))
+async def handle_radar_navigation(callback: CallbackQuery, state: FSMContext):
+    nav_action = callback.data.split("nav:")[1]
+    if nav_action == "leaderboard":
+        leaders = get_leaderboard_data(limit=5)
+        if not leaders:
+            await callback.answer("No restaurant ratings recorded yet!", show_alert=True)
+            return
+        text_lines = ["🏆 <b>TirfMarket Restaurant Leaderboard</b>\n"]
+        for idx, r in enumerate(leaders, 1):
+            name = r["restaurant_name"]
+            avg = round(r["avg_score"], 1)
+            count = r["rating_count"]
+            medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else f"{idx}."
+            text_lines.append(f"{medal} <b>{name}</b> - ⭐ {avg}/5.0 <i>({count} ratings)</i>")
+        text_lines.append("\n<i>Rankings are updated in real-time!</i>")
+        await callback.message.answer("\n".join(text_lines), parse_mode="HTML")
+        await callback.answer()
+    elif nav_action == "share":
+        await callback.message.answer("📸 Tap /share to send your food photo and review!")
+        await callback.answer()
 
 @dp.message(Command("myid"))
 @dp.message(Command("id"))
 async def handle_myid(message: Message):
     user_id = message.from_user.id
     is_admin = (ADMIN_ID is not None and user_id == ADMIN_ID)
-    status_tag = "👑 (Verified Admin)" if is_admin else "🎓 (Student)"
-    await message.answer(f"Your Telegram ID: <code>{user_id}</code> {status_tag}\n\nConfigure in your <code>.env</code> file:\n<code>ADMIN_ID={user_id}</code>\n<code>CHANNEL_ID=@YourChannel</code>", parse_mode="HTML")
+    if is_admin:
+        await message.answer(
+            f"Your Telegram ID: <code>{user_id}</code> 👑 (Verified Admin)\n\n"
+            f"Configure in your <code>.env</code> file:\n"
+            f"<code>ADMIN_ID={user_id}</code>\n"
+            f"<code>CHANNEL_ID=@YourChannel</code>",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(f"Your Telegram ID: <code>{user_id}</code> 🎓 (Student)", parse_mode="HTML")
 
 @dp.message(Command("cancel"))
 async def handle_cancel_fsm(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Action canceled. You are back to the main menu. Type /radar to scan for deals, or /start to change your zone.")
+
+
+@dp.message(Command("addadmin"), IsAdmin())
+async def handle_add_admin(message: Message, command: CommandObject):
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer("⚠️ Please provide a valid Telegram ID to add as admin.\nExample: <code>/addadmin 123456789</code>", parse_mode="HTML")
+        return
+        
+    new_admin_id = int(command.args.strip())
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO admins (telegram_id, added_by) VALUES (?, ?)", (new_admin_id, message.from_user.id))
+        conn.commit()
+        
+    await message.answer(f"👑 Successfully added <code>{new_admin_id}</code> as a TirfMarket Admin!", parse_mode="HTML")
+
+@dp.message(Command("removeadmin"), IsAdmin())
+async def handle_remove_admin(message: Message, command: CommandObject):
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer("⚠️ Please provide a valid Telegram ID to remove.\nExample: <code>/removeadmin 123456789</code>", parse_mode="HTML")
+        return
+        
+    target_id = int(command.args.strip())
+    raw_env = os.getenv("ADMIN_ID", "")
+    if str(target_id) in [p.strip() for p in raw_env.split(",")]:
+        await message.answer("⚠️ Cannot remove the primary root admin configured in <code>.env</code>.", parse_mode="HTML")
+        return
+        
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM admins WHERE telegram_id = ?", (target_id,))
+        conn.commit()
+        
+    await message.answer(f"🛑 Removed <code>{target_id}</code> from admin privileges.", parse_mode="HTML")
+
+
+@dp.message(Command("deletedeal"), IsAdmin())
+@dp.message(Command("delete_deal"), IsAdmin())
+async def handle_delete_deal_menu(message: Message):
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT deal_id, restaurant_name, price, is_active FROM active_deals ORDER BY id DESC LIMIT 15")
+        deals = cursor.fetchall()
+        
+    if not deals:
+        await message.answer("ℹ️ No deals found in the database to delete.")
+        return
+        
+    keyboard = []
+    for d in deals:
+        status_txt = "🟢 Active" if d["is_active"] == 1 else "🔴 Closed"
+        keyboard.append([InlineKeyboardButton(text=f"🗑️ Delete: {d['restaurant_name']} ({d['price']} ETB) [{status_txt}]", callback_data=f"admin_delete:{d['deal_id']}")])
+        
+    await message.answer("Select a deal to permanently delete from the database:", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+
+@dp.callback_query(F.data.startswith("admin_delete:"), IsAdmin())
+async def handle_admin_delete_action(callback: CallbackQuery):
+    deal_id = callback.data.split("admin_delete:")[1]
+    with sqlite3.connect(DB_FILE) as conn:
+        cursor = conn.cursor()
+        # Delete related claims and ratings first to maintain integrity
+        cursor.execute("DELETE FROM claims WHERE deal_id = ?", (deal_id,))
+        cursor.execute("DELETE FROM ratings WHERE deal_id = ?", (deal_id,))
+        cursor.execute("DELETE FROM active_deals WHERE deal_id = ?", (deal_id,))
+        conn.commit()
+        
+    await callback.message.edit_text("🗑️ Deal and its associated claim/rating records have been permanently deleted from the database.", reply_markup=None)
+    await callback.answer("Deal deleted.")
 
 @dp.message(Command("close_deal"), IsAdmin())
 @dp.message(Command("closedeal"), IsAdmin())
@@ -517,10 +718,11 @@ async def process_reopen_stock(message: Message, state: FSMContext, bot: Bot):
     photo_file_id = old_deal["photo_file_id"]
     price = old_deal["price"]
     map_link = old_deal["map_link"] if "map_link" in old_deal.keys() else ""
+    valid_until = old_deal["valid_until"] if "valid_until" in old_deal.keys() and old_deal["valid_until"] else "9:30 PM Tonight (3:30 ከሰዓት በኋላ)"
     zones_str = old_deal["zones"]
     
     target_zone_names = [z.strip() for z in zones_str.split(",")]
-    save_active_deal(new_deal_id, restaurant_name, photo_file_id, price, new_stock, target_zone_names, map_link)
+    save_active_deal(new_deal_id, restaurant_name, photo_file_id, price, new_stock, target_zone_names, map_link, valid_until)
     await message.answer("Saving & broadcasting reopened deal...", show_alert=False)
 
     caption = build_deal_caption(restaurant_name, zones_str, new_stock, price)
@@ -570,13 +772,32 @@ async def process_deal_photo(message: Message, state: FSMContext):
 
 @dp.message(NewDealStates.waiting_for_price, F.text)
 async def process_deal_price(message: Message, state: FSMContext):
-    await state.update_data(price=int(message.text.strip()))
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("⚠️ Please enter a valid number for the price in ETB (e.g. 20):")
+        return
+    await state.update_data(price=int(text))
     await state.set_state(NewDealStates.waiting_for_stock)
-    await message.answer("📦 How many deals are available right now?")
+    await message.answer("📦 How many deals are available right now? (e.g. 15)")
 
 @dp.message(NewDealStates.waiting_for_stock, F.text)
 async def process_deal_stock(message: Message, state: FSMContext):
-    await state.update_data(stock=int(message.text.strip()))
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("⚠️ Please enter a valid number for stock quantity (e.g. 15):")
+        return
+    await state.update_data(stock=int(text))
+    await state.set_state(NewDealStates.waiting_for_valid_until)
+    await message.answer(
+        "⏰ Enter the <b>Valid Until</b> time in both English and Ethiopian time.\n"
+        "<i>Example: 9:30 PM Tonight (3:30 ከሰዓት በኋላ)</i>",
+        parse_mode="HTML"
+    )
+
+@dp.message(NewDealStates.waiting_for_valid_until, F.text)
+async def process_valid_until(message: Message, state: FSMContext):
+    valid_until = message.text.strip()
+    await state.update_data(valid_until=valid_until)
     await state.set_state(NewDealStates.waiting_for_map_link)
     await message.answer("🗺️ Paste the Google Maps link for the restaurant (or type 'skip' if you don't have one):")
 
@@ -615,11 +836,12 @@ async def handle_confirm_broadcast(callback: CallbackQuery, state: FSMContext, b
     price = data.get("price", 0)
     stock = data.get("stock", 0)
     map_link = data.get("map_link", "")
+    valid_until = data.get("valid_until", "9:30 PM Tonight (3:30 ከሰዓት በኋላ)")
     target_zone_names = [CAMPUS_ZONES.get(k, k) for k in selected_keys]
     comma_separated_zones = ", ".join(target_zone_names)
     deal_id = f"deal_{uuid.uuid4().hex[:8]}"
 
-    save_active_deal(deal_id, restaurant_name, photo_file_id, price, stock, target_zone_names, map_link)
+    save_active_deal(deal_id, restaurant_name, photo_file_id, price, stock, target_zone_names, map_link, valid_until)
     await state.clear()
     await callback.answer("Saving & broadcasting...", show_alert=False)
 
@@ -634,7 +856,7 @@ async def handle_confirm_broadcast(callback: CallbackQuery, state: FSMContext, b
         except TelegramAPIError:
             pass
 
-    await bot.send_message(chat_id=callback.from_user.id, text=f"✅ Broadcast Complete to {len(subscribers)} students!")
+    await callback.message.answer(f"✅ Broadcast Complete to {len(subscribers)} students!")
     
     # Layer 20: Auto Announce to Channel
     if CHANNEL_ID:
@@ -680,6 +902,7 @@ async def handle_claim_deal(callback: CallbackQuery, bot: Bot):
             await callback.message.edit_caption(caption=updated_caption, reply_markup=updated_keyboard)
         except: pass
 
+    valid_until_str = deal["valid_until"] if deal and "valid_until" in deal.keys() and deal["valid_until"] else "9:30 PM Tonight (3:30 ከሰዓት በኋላ)"
     voucher_msg = (
         "✅ <b>DEAL LOCKED & CONFIRMED!</b>\n\n"
         "🎟️ <b>ACTION VOUCHER PASS:</b>\n"
@@ -688,7 +911,7 @@ async def handle_claim_deal(callback: CallbackQuery, bot: Bot):
         f"💵 <b>Price:</b> {price} ETB (Pay at counter)\n"
         f"📍 <b>Location:</b> {zones_display}\n"
         f"{map_link_str}"
-        "⏰ <b>Valid Until:</b> 9:30 PM Tonight\n\n"
+        f"⏰ <b>Valid Until:</b> {valid_until_str}\n\n"
         "💡 <b>Instructions:</b>\n"
         f"Show this message and your physical AAU Student ID to the cashier."
     )
@@ -708,6 +931,7 @@ async def handle_accept_deal(callback: CallbackQuery):
     zones_display = (deal["zones"] if ("zones" in deal.keys() and deal["zones"]) else deal["zone"])
     map_link_str = f"🗺️ <b>Map:</b> {deal['map_link']}\n" if deal and ("map_link" in deal.keys() and deal["map_link"]) else ""
     
+    valid_until_str = deal["valid_until"] if deal and "valid_until" in deal.keys() and deal["valid_until"] else "9:30 PM Tonight (3:30 ከሰዓት በኋላ)"
     redeemed_msg = (
         "🎉 <b>DEAL PERMANENTLY REDEEMED!</b>\n\n"
         "🎟️ <b>ACTION VOUCHER PASS:</b>\n"
@@ -716,7 +940,7 @@ async def handle_accept_deal(callback: CallbackQuery):
         f"💵 <b>Price:</b> {price} ETB (Pay at counter)\n"
         f"📍 <b>Location:</b> {zones_display}\n"
         f"{map_link_str}"
-        "⏰ <b>Status:</b> Claimed & Redeemed ✅\n\n"
+        f"⏰ <b>Valid Until:</b> {valid_until_str} (Redeemed ✅)\n\n"
         "📸 <i>Enjoy your meal! Want to feature on our page? Tap /share to drop your food pics and feedback!</i>"
     )
     
@@ -874,20 +1098,72 @@ async def handle_leaderboard(message: Message):
 
 @dp.message(Command("share"))
 async def handle_share_command(message: Message, state: FSMContext):
-    await state.set_state(ShareStates.waiting_for_feedback)
+    user_id = message.from_user.id
+    # Find deals claimed by this user
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ad.deal_id, ad.restaurant_name, ad.price 
+            FROM claims c 
+            JOIN active_deals ad ON c.deal_id = ad.deal_id 
+            WHERE c.telegram_id = ? 
+            ORDER BY c.id DESC LIMIT 5
+        """, (user_id,))
+        claimed_deals = cursor.fetchall()
+        
+    if not claimed_deals:
+        # Fallback to recent active deals if no claims found
+        cursor.execute("SELECT deal_id, restaurant_name, price FROM active_deals ORDER BY id DESC LIMIT 5")
+        claimed_deals = cursor.fetchall()
+        
+    if not claimed_deals:
+        # Fallback default if no deals exist at all
+        await state.update_data(deal_name="TirfMarket Deal")
+        await state.set_state(ShareStates.waiting_for_feedback)
+        await message.answer(
+            "📸 <b>Share Your Experience!</b>\n\n"
+            "Send your picture or text review below (or type /cancel to exit):",
+            parse_mode="HTML"
+        )
+        return
+
+    keyboard = []
+    for d in claimed_deals:
+        keyboard.append([InlineKeyboardButton(text=f"🍔 {d['restaurant_name']} ({d['price']} ETB)", callback_data=f"share_deal:{d['restaurant_name']}")])
+    keyboard.append([InlineKeyboardButton(text="🏷️ General TirfMarket Feedback", callback_data="share_deal:TirfMarket Deal")])
+
     await message.answer(
         "📸 <b>Share Your Experience!</b>\n\n"
-        "You can send a <b>picture</b> of your food, type a <b>text review</b>, or send both together as a photo with a caption!\n\n"
-        "<i>Drop your feedback below (or type /cancel to exit).</i>",
+        "Which restaurant or deal are you reviewing today?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
         parse_mode="HTML"
     )
 
+@dp.callback_query(F.data.startswith("share_deal:"))
+async def handle_share_deal_selection(callback: CallbackQuery, state: FSMContext):
+    deal_name = callback.data.split("share_deal:")[1]
+    await state.update_data(deal_name=deal_name)
+    await state.set_state(ShareStates.waiting_for_feedback)
+    
+    await callback.message.edit_text(
+        f"✅ Reviewing: <b>{deal_name}</b>\n\n"
+        "Now send your <b>picture</b>, type a <b>text review</b>, or send both together!\n\n"
+        "<i>Drop your feedback below (or type /cancel to exit).</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 @dp.message(ShareStates.waiting_for_feedback, F.text | F.photo)
 async def handle_feedback_submission(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    deal_name = data.get("deal_name", "TirfMarket Deal")
     await state.clear()
+    
     await message.answer("🔥 Awesome! Thanks for your feedback. We might feature this in our next drop!\n(To send more, just type /share again)")
     
-    if ADMIN_ID:
+    admin_list = get_admin_ids()
+    if admin_list:
         user = message.from_user
         user_handle = f"@{user.username}" if user.username else user.first_name
         
@@ -897,9 +1173,14 @@ async def handle_feedback_submission(message: Message, state: FSMContext, bot: B
         
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(pending_reviews)")
+            cols = [c[1] for c in cursor.fetchall()]
+            if "deal_name" not in cols:
+                cursor.execute("ALTER TABLE pending_reviews ADD COLUMN deal_name TEXT DEFAULT 'TirfMarket Deal'")
+                
             cursor.execute(
-                "INSERT INTO pending_reviews (user_id, user_handle, media_type, file_id, text_content) VALUES (?, ?, ?, ?, ?)",
-                (user.id, user_handle, media_type, file_id, text_content or "")
+                "INSERT INTO pending_reviews (user_id, user_handle, deal_name, media_type, file_id, text_content) VALUES (?, ?, ?, ?, ?, ?)",
+                (user.id, user_handle, deal_name, media_type, file_id, text_content or "")
             )
             review_id = cursor.lastrowid
             conn.commit()
@@ -909,18 +1190,19 @@ async def handle_feedback_submission(message: Message, state: FSMContext, bot: B
             [InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_review:{review_id}")]
         ])
         
-        if media_type == "photo":
-            admin_caption = f"📸 <b>Pending Photo Review</b>\n👤 <b>From:</b> {user_handle} (<code>{user.id}</code>)\n📝 <b>Review:</b> {text_content or '(No text)'}"
-            try: 
-                await bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=admin_caption, parse_mode="HTML", reply_markup=approval_kb)
-            except TelegramAPIError: 
-                pass
-        else:
-            admin_text = f"🗣️ <b>Pending Text Review</b>\n👤 <b>From:</b> {user_handle} (<code>{user.id}</code>)\n📝 <b>Review:</b>\n{text_content}"
-            try:
-                await bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="HTML", reply_markup=approval_kb)
-            except TelegramAPIError:
-                pass
+        for adm_id in admin_list:
+            if media_type == "photo":
+                admin_caption = f"📸 <b>Pending Photo Review (Shared under {deal_name})</b>\n👤 <b>From:</b> {user_handle} (<code>{user.id}</code>)\n🍔 <b>Deal:</b> {deal_name}\n📝 <b>Review:</b> {text_content or '(No text)'}"
+                try: 
+                    await bot.send_photo(chat_id=adm_id, photo=file_id, caption=admin_caption, parse_mode="HTML", reply_markup=approval_kb)
+                except TelegramAPIError: 
+                    pass
+            else:
+                admin_text = f"🗣️ <b>Pending Text Review (Shared under {deal_name})</b>\n👤 <b>From:</b> {user_handle} (<code>{user.id}</code>)\n🍔 <b>Deal:</b> {deal_name}\n📝 <b>Review:</b>\n{text_content}"
+                try:
+                    await bot.send_message(chat_id=adm_id, text=admin_text, parse_mode="HTML", reply_markup=approval_kb)
+                except TelegramAPIError:
+                    pass
 
 @dp.callback_query(F.data.startswith("approve_review:"), IsAdmin())
 async def handle_approve_review(callback: CallbackQuery, bot: Bot):
@@ -937,7 +1219,14 @@ async def handle_approve_review(callback: CallbackQuery, bot: Bot):
         return
         
     if CHANNEL_ID:
-        public_caption = f"📸 <b>Community Spotlight!</b>\n\n📝 <i>\"{review['text_content']}\"</i>\n\n👉 Join the radar: @{BOT_USERNAME}" if review['text_content'] else f"📸 <b>Community Spotlight!</b>\n\n👉 Join the radar: @{BOT_USERNAME}"
+        d_name = review["deal_name"] if "deal_name" in review.keys() and review["deal_name"] else "TirfMarket Deal"
+        text_part = f"📝 <i>\"{review['text_content']}\"</i>\n\n" if review['text_content'] else ""
+        
+        public_caption = (
+            f"📸 <b>Community Spotlight: {d_name}!</b>\n\n"
+            f"{text_part}"
+            f"👉 Grab student flash deals on @{BOT_USERNAME}"
+        )
         try:
             if review["media_type"] == "photo":
                 await bot.send_photo(chat_id=CHANNEL_ID, photo=review["file_id"], caption=public_caption, parse_mode="HTML")
@@ -990,34 +1279,42 @@ async def main():
     
     public_commands = [
         BotCommand(command="start", description="Set or change campus zone"),
-        BotCommand(command="radar", description="Check active deals in your zone"),
-        BotCommand(command="share", description="Share your food photo & review"),
+        BotCommand(command="radar", description="Scan active deals radar"),
         BotCommand(command="rate", description="Rate your claimed deals"),
-        BotCommand(command="leaderboard", description="View restaurant ratings leaderboard"),
-        BotCommand(command="cancel", description="Cancel your current action"),
+        BotCommand(command="cancel", description="Cancel current action"),
         BotCommand(command="myid", description="Get your Telegram User ID"),
     ]
     await bot.set_my_commands(public_commands)
     
-    if ADMIN_ID:
+    admin_set = get_admin_ids()
+    for adm_id in admin_set:
         admin_commands = [
             BotCommand(command="start", description="Set or change campus zone"),
             BotCommand(command="radar", description="Check active deals in your zone"),
             BotCommand(command="share", description="Share your food photo & review"),
-        BotCommand(command="rate", description="Rate your claimed deals"),
-        BotCommand(command="leaderboard", description="View restaurant ratings leaderboard"),
+            BotCommand(command="rate", description="Rate your claimed deals"),
+            BotCommand(command="leaderboard", description="View restaurant ratings leaderboard"),
             BotCommand(command="newdeal", description="[Admin] Drop a new flash deal"),
             BotCommand(command="close_deal", description="[Admin] Close active deal"),
             BotCommand(command="reopen", description="[Admin] Reopen a closed deal"),
+            BotCommand(command="deletedeal", description="[Admin] Delete a deal from database"),
+            BotCommand(command="addadmin", description="[Admin] Add a new admin ID"),
+            BotCommand(command="removeadmin", description="[Admin] Remove an admin ID"),
             BotCommand(command="cancel", description="Cancel current action"),
             BotCommand(command="myid", description="Get your Telegram User ID"),
         ]
-        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+        try:
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=adm_id))
+        except Exception:
+            pass
 
-    try: 
-        await dp.start_polling(bot, skip_updates=True)
-    finally: 
-        await bot.session.close()
+    while True:
+        try:
+            logger.info("Starting polling loop...")
+            await dp.start_polling(bot, skip_updates=True)
+        except Exception as e:
+            logger.error(f"Polling error encountered: {e}. Reconnecting in 3 seconds...")
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
     asyncio.run(main())
