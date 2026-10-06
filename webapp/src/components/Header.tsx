@@ -57,7 +57,7 @@ export default function Header() {
               <Menu className="w-6 h-6 text-gray-700" />
             </button>
             <Link href="/" className="text-2xl font-bold text-green-700 flex items-center gap-1">
-              <span className="text-yellow-500">Tirf</span>Market
+              <span className="text-yellow-500">Tirf</span> Market
             </Link>
           </div>
 

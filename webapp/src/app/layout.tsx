@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TirfMarket | Best Deals in Ethiopia",
+  title: "Tirf Market | Best Deals in Ethiopia",
   description: "Discover the best deals on restaurants, spas, electronics, and more in Ethiopia. Pay securely with M-Pesa.",
 };
 

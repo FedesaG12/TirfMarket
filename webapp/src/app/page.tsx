@@ -105,7 +105,7 @@ export default function Home() {
                   key={deal.id}
                   id={deal.id}
                   title={deal.title}
-                  merchant={deal.merchant_name || 'TirfMarket Merchant'}
+                  merchant={deal.merchant_name || 'Tirf Market Merchant'}
                   location="Addis Ababa" // Note: Currently hardcoded as we simplified
                   originalPrice={deal.original_price}
                   discountedPrice={deal.discounted_price}
@@ -125,7 +125,7 @@ export default function Home() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8 border-b border-gray-800 pb-8">
             <div>
               <h3 className="text-2xl font-bold mb-4 flex items-center gap-1">
-                <span className="text-yellow-500">Tirf</span>Market
+                <span className="text-yellow-500">Tirf</span> Market
               </h3>
               <p className="text-gray-400 text-sm mb-4">
                 The leading daily deal platform in Ethiopia. Discover, buy and share the best deals in your city.
@@ -160,7 +160,7 @@ export default function Home() {
             </div>
           </div>
           <div className="text-center text-sm text-gray-500">
-            &copy; {new Date().getFullYear()} TirfMarket. All rights reserved. Made in Ethiopia.
+            &copy; {new Date().getFullYear()} Tirf Market. All rights reserved. Made in Ethiopia.
           </div>
         </div>
       </footer>

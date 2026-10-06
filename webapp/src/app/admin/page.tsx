@@ -116,7 +116,7 @@ export default function AdminDashboard() {
         <div className="container mx-auto px-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <ShieldCheck className="w-8 h-8 text-yellow-500" />
-            <h1 className="text-2xl font-bold">TirfMarket Admin Control</h1>
+            <h1 className="text-2xl font-bold">Tirf Market Admin Control</h1>
           </div>
           <Link href="/" className="text-gray-300 hover:text-white transition-colors">
             Exit to Site
