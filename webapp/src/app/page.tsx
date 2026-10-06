@@ -40,6 +40,17 @@ export default function Home() {
     { name: t('cat.auto'), icon: Car, color: 'bg-red-100 text-red-600' },
   ];
 
+  const scrollToSection = (id: string) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const handleActionClick = (action: string) => {
+    alert(`${action} feature coming soon!`);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 font-sans">
       <Header />
@@ -58,10 +69,16 @@ export default function Home() {
               {t("hero.subtitle")}
             </p>
             <div className="flex flex-wrap gap-4">
-              <button className="bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-bold py-3 px-8 rounded-full transition-colors shadow-lg">
+              <button 
+                onClick={() => scrollToSection('deals')}
+                className="bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-bold py-3 px-8 rounded-full transition-colors shadow-lg cursor-pointer"
+              >
                 {t("hero.explore")}
               </button>
-              <button className="bg-white/20 hover:bg-white/30 backdrop-blur-sm border border-white/40 text-white font-bold py-3 px-8 rounded-full transition-colors">
+              <button 
+                onClick={() => scrollToSection('how-it-works')}
+                className="bg-white/20 hover:bg-white/30 backdrop-blur-sm border border-white/40 text-white font-bold py-3 px-8 rounded-full transition-colors cursor-pointer"
+              >
                 {t("hero.how")}
               </button>
             </div>
@@ -73,7 +90,11 @@ export default function Home() {
           <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b-2 border-green-600 inline-block pb-1">{t("categories.title")}</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             {CATEGORIES.map((cat, idx) => (
-              <div key={idx} className="bg-white rounded-xl p-4 flex flex-col items-center justify-center gap-3 cursor-pointer hover:shadow-md transition-shadow border border-gray-100">
+              <div 
+                key={idx} 
+                onClick={() => scrollToSection('deals')}
+                className="bg-white rounded-xl p-4 flex flex-col items-center justify-center gap-3 cursor-pointer hover:shadow-md transition-shadow border border-gray-100"
+              >
                 <div className={`p-3 rounded-full ${cat.color}`}>
                   <cat.icon className="w-6 h-6" />
                 </div>
@@ -83,11 +104,39 @@ export default function Home() {
           </div>
         </div>
 
+        {/* How it Works Section */}
+        <div id="how-it-works" className="mb-16 bg-white rounded-3xl p-8 shadow-sm border border-gray-100 scroll-mt-24">
+          <h2 className="text-3xl font-bold text-gray-900 mb-8 text-center border-b-2 border-yellow-500 inline-block pb-2 mx-auto flex w-fit">Why Choose Tirf Market?</h2>
+          <div className="grid md:grid-cols-3 gap-8">
+            <div className="text-center space-y-4">
+              <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Sparkles className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800">Unbeatable Discounts</h3>
+              <p className="text-gray-600">We partner with local Ethiopian businesses to bring you exclusive flash deals. Save up to 70% on your favorite meals, spa treatments, and electronics.</p>
+            </div>
+            <div className="text-center space-y-4">
+              <div className="w-16 h-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <MonitorSmartphone className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800">Seamless Telegram Integration</h3>
+              <p className="text-gray-600">Tirf Market isn't just a website. Connect with our Telegram Bot to get instant alerts on fresh deals directly on your phone so you never miss out.</p>
+            </div>
+            <div className="text-center space-y-4">
+              <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Car className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800">Fast & Secure Payments</h3>
+              <p className="text-gray-600">Checkout is quick and secure using Safaricom M-Pesa. Receive your digital voucher instantly and redeem it right at the counter.</p>
+            </div>
+          </div>
+        </div>
+
         {/* Trending Deals */}
-        <div>
+        <div id="deals" className="scroll-mt-24">
           <div className="flex justify-between items-end mb-6">
             <h2 className="text-2xl font-bold text-gray-900 border-b-2 border-green-600 inline-block pb-1">{t("trending.title")}</h2>
-            <button className="text-green-700 font-medium hover:underline text-sm">{t("trending.viewAll")}</button>
+            <button onClick={() => handleActionClick("View all deals")} className="text-green-700 font-medium hover:underline text-sm cursor-pointer">{t("trending.viewAll")}</button>
           </div>
           
           {loading ? (
@@ -139,17 +188,17 @@ export default function Home() {
             <div>
               <h4 className="font-bold mb-4">Company</h4>
               <ul className="space-y-2 text-sm text-gray-400">
-                <li><a href="#" className="hover:text-white">About Us</a></li>
-                <li><a href="#" className="hover:text-white">Careers</a></li>
-                <li><a href="#" className="hover:text-white">Press</a></li>
+                <li><button onClick={() => handleActionClick("Footer link")} className="hover:text-white cursor-pointer">About Us</button></li>
+                <li><button onClick={() => handleActionClick("Footer link")} className="hover:text-white cursor-pointer">Careers</button></li>
+                <li><button onClick={() => handleActionClick("Footer link")} className="hover:text-white cursor-pointer">Press</button></li>
               </ul>
             </div>
             <div>
               <h4 className="font-bold mb-4">Work with Us</h4>
               <ul className="space-y-2 text-sm text-gray-400">
-                <li><a href="#" className="hover:text-white">Run a Deal</a></li>
-                <li><a href="#" className="hover:text-white">Merchant Center</a></li>
-                <li><a href="#" className="hover:text-white">Affiliate Program</a></li>
+                <li><button onClick={() => handleActionClick("Footer link")} className="hover:text-white cursor-pointer">Run a Deal</button></li>
+                <li><button onClick={() => handleActionClick("Footer link")} className="hover:text-white cursor-pointer">Merchant Center</button></li>
+                <li><button onClick={() => handleActionClick("Footer link")} className="hover:text-white cursor-pointer">Affiliate Program</button></li>
               </ul>
             </div>
             <div>
