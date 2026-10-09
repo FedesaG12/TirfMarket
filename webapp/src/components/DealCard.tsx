@@ -13,6 +13,7 @@ interface DealProps {
   image: string;
   bought: number;
   onBuy: () => void;
+  onClick?: () => void;
 }
 
 export default function DealCard({ 
@@ -23,13 +24,16 @@ export default function DealCard({
   discountedPrice, 
   image, 
   bought,
-  onBuy
+  onBuy,
+  onClick
 }: DealProps) {
-  const discountPercent = Math.round(((originalPrice - discountedPrice) / originalPrice) * 100);
+  const safeOriginal = Number(originalPrice) || 0;
+  const safeDiscounted = Number(discountedPrice) || 0;
+  const discountPercent = safeOriginal > 0 ? Math.round(((safeOriginal - safeDiscounted) / safeOriginal) * 100) : 0;
   const { t } = useLanguage();
 
   return (
-    <div className="bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow duration-300 border border-gray-100 flex flex-col h-full">
+    <div onClick={onClick} className={`bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition-shadow duration-300 border border-gray-100 flex flex-col h-full ${onClick ? 'cursor-pointer' : ''}`}>
       <div className="relative h-48 w-full bg-gray-200">
         <Image 
           src={image} 
@@ -53,12 +57,12 @@ export default function DealCard({
         
         <div className="mt-auto flex items-end justify-between pt-4 border-t border-gray-100">
           <div>
-            <p className="text-sm text-gray-400 line-through">ETB {originalPrice.toLocaleString()}</p>
-            <p className="text-xl font-bold text-green-700">ETB {discountedPrice.toLocaleString()}</p>
+            <p className="text-sm text-gray-400 line-through">ETB {safeOriginal.toLocaleString()}</p>
+            <p className="text-xl font-bold text-green-700">ETB {safeDiscounted.toLocaleString()}</p>
           </div>
           
           <button 
-            onClick={onBuy}
+            onClick={(e) => { e.stopPropagation(); onBuy(); }}
             className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2 text-sm"
           >
             {t("deal.buyNow")}

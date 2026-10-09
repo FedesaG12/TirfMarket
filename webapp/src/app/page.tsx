@@ -4,12 +4,14 @@ import React, { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import DealCard from '@/components/DealCard';
 import MpesaModal from '@/components/MpesaModal';
+import DealDetailsModal from '@/components/DealDetailsModal';
 import { Utensils, Coffee, Bed, Sparkles, MonitorSmartphone, Car, Loader2 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { supabase } from '@/lib/supabase';
 
 export default function Home() {
-  const [selectedDeal, setSelectedDeal] = useState<any | null>(null);
+  const [selectedDealForDetails, setSelectedDealForDetails] = useState<any | null>(null);
+  const [selectedDealForBuy, setSelectedDealForBuy] = useState<any | null>(null);
   const [deals, setDeals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const { t } = useLanguage();
@@ -160,7 +162,8 @@ export default function Home() {
                   discountedPrice={deal.discounted_price}
                   image={deal.image_url}
                   bought={deal.bought_count || 0}
-                  onBuy={() => setSelectedDeal(deal)}
+                  onBuy={() => setSelectedDealForBuy(deal)}
+                  onClick={() => setSelectedDealForDetails(deal)}
                 />
               ))}
             </div>
@@ -214,13 +217,26 @@ export default function Home() {
         </div>
       </footer>
 
+      {/* Deal Details & Reviews Modal */}
+      {selectedDealForDetails && (
+        <DealDetailsModal 
+          deal={selectedDealForDetails}
+          isOpen={!!selectedDealForDetails}
+          onClose={() => setSelectedDealForDetails(null)}
+          onBuy={() => {
+            setSelectedDealForDetails(null);
+            setSelectedDealForBuy(selectedDealForDetails);
+          }}
+        />
+      )}
+
       {/* M-Pesa Payment Modal */}
-      {selectedDeal && (
+      {selectedDealForBuy && (
         <MpesaModal 
-          isOpen={!!selectedDeal} 
-          onClose={() => setSelectedDeal(null)} 
-          amount={selectedDeal.discountedPrice}
-          dealTitle={selectedDeal.title}
+          isOpen={!!selectedDealForBuy} 
+          onClose={() => setSelectedDealForBuy(null)} 
+          amount={(selectedDealForBuy.discounted_price || selectedDealForBuy.discountedPrice)}
+          dealTitle={selectedDealForBuy.title}
         />
       )}
     </div>

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Store, PlusCircle, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Store, PlusCircle, Clock, CheckCircle2, XCircle, Loader2, Image as ImageIcon } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -20,17 +20,22 @@ interface Deal {
 export default function SellerDashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isSeller, setIsSeller] = useState(false);
   const [error, setError] = useState('');
   
   // Form State
   const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
   const [merchantName, setMerchantName] = useState('');
   const [category, setCategory] = useState('Food & Drink');
   const [originalPrice, setOriginalPrice] = useState('');
   const [discountedPrice, setDiscountedPrice] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
+  
+  // New Groupon-like fields
+  const [description, setDescription] = useState('');
+  const [location, setLocation] = useState('');
+  const [finePrint, setFinePrint] = useState('');
+  const [highlights, setHighlights] = useState('');
+  
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userId, setUserId] = useState('');
 
@@ -48,19 +53,22 @@ export default function SellerDashboard() {
       }
       setUserId(user.id);
 
-      const { data: profile, error: profileError } = await supabase
+      const { data: profile } = await supabase
         .from('profiles')
-        .select('account_type, role')
+        .select('account_type, full_name')
         .eq('id', user.id)
         .single();
         
-      if (profileError || (profile?.account_type !== 'seller' && profile?.role !== 'admin')) {
+      if (!profile || profile.account_type !== 'seller') {
         setError("Access Denied. You must be a registered Seller to post deals.");
         setLoading(false);
         return;
       }
+      
+      if (profile.full_name && !merchantName) {
+        setMerchantName(profile.full_name);
+      }
 
-      setIsSeller(true);
       fetchDeals(user.id);
     } catch (err: any) {
       setError(err.message);
@@ -81,19 +89,45 @@ export default function SellerDashboard() {
     setLoading(false);
   };
 
+  const handleImageUpload = async (file: File) => {
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Math.random()}.${fileExt}`;
+    const { error: uploadError } = await supabase.storage
+      .from('deal-images')
+      .upload(fileName, file);
+
+    if (uploadError) {
+      console.error('Upload error:', uploadError);
+      return null;
+    }
+    const { data: publicUrlData } = supabase.storage
+      .from('deal-images')
+      .getPublicUrl(fileName);
+    return publicUrlData.publicUrl;
+  };
+
   const handleSubmitDeal = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    
+    let uploadedImageUrl = 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&q=80&w=800';
+    if (imageFile) {
+      const url = await handleImageUpload(imageFile);
+      if (url) uploadedImageUrl = url;
+    }
     
     const newDeal = {
       seller_id: userId,
       title,
       description,
+      location,
+      fine_print: finePrint,
+      highlights,
       merchant_name: merchantName,
       category,
       original_price: parseFloat(originalPrice),
       discounted_price: parseFloat(discountedPrice),
-      image_url: imageUrl || 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&q=80&w=800',
+      image_url: uploadedImageUrl,
       status: 'pending' // requires admin approval
     };
 
@@ -105,9 +139,12 @@ export default function SellerDashboard() {
       alert("Deal submitted successfully! It is now pending Admin approval.");
       setTitle('');
       setDescription('');
+      setLocation('');
+      setFinePrint('');
+      setHighlights('');
       setOriginalPrice('');
       setDiscountedPrice('');
-      setImageUrl('');
+      setImageFile(null);
       fetchDeals(userId); // refresh list
     }
     setIsSubmitting(false);
@@ -182,10 +219,43 @@ export default function SellerDashboard() {
                   <input required type="number" min="0" value={discountedPrice} onChange={e=>setDiscountedPrice(e.target.value)} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" />
                 </div>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Image URL (Optional)</label>
-                <input type="url" value={imageUrl} onChange={e=>setImageUrl(e.target.value)} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" placeholder="https://..." />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                <input required type="text" value={location} onChange={e=>setLocation(e.target.value)} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" placeholder="e.g. Bole, Addis Ababa" />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">About This Deal</label>
+                <textarea rows={3} required value={description} onChange={e=>setDescription(e.target.value)} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" placeholder="Describe the offer..."></textarea>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Highlights (Optional)</label>
+                <textarea rows={2} value={highlights} onChange={e=>setHighlights(e.target.value)} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" placeholder="Key benefits..."></textarea>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">The Fine Print (Optional)</label>
+                <textarea rows={2} value={finePrint} onChange={e=>setFinePrint(e.target.value)} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500" placeholder="Valid only on weekdays, etc."></textarea>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Upload Photo</label>
+                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg">
+                  <div className="space-y-1 text-center">
+                    <ImageIcon className="mx-auto h-12 w-12 text-gray-400" />
+                    <div className="flex text-sm text-gray-600 justify-center">
+                      <label className="relative cursor-pointer bg-white rounded-md font-medium text-green-600 hover:text-green-500">
+                        <span>Upload a file</span>
+                        <input type="file" accept="image/*" className="sr-only" onChange={(e) => e.target.files && setImageFile(e.target.files[0])} />
+                      </label>
+                    </div>
+                    <p className="text-xs text-gray-500">{imageFile ? imageFile.name : 'PNG, JPG, GIF up to 5MB'}</p>
+                  </div>
+                </div>
+              </div>
+
               <button disabled={isSubmitting} type="submit" className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition-colors flex justify-center items-center">
                 {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Submit for Approval'}
               </button>
